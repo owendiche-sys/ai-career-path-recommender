@@ -1,4 +1,5 @@
 import ast
+import csv
 from pathlib import Path
 
 import pandas as pd
@@ -7,7 +8,6 @@ import streamlit as st
 
 st.set_page_config(
     page_title="Personalized Career Path Recommendation with AI",
-    page_icon="🎯",
     layout="wide"
 )
 
@@ -17,7 +17,7 @@ st.set_page_config(
 # repo/
 # ├── app.py
 # ├── result/
-# │   └── career_roles_seed.csv
+# │   └── career_roles_seed.xlsx
 # ├── notebooks/
 # ├── data/
 # └── requirements.txt
@@ -28,8 +28,25 @@ DATA_FILE = BASE_DIR / "result" / "career_roles_seed.xlsx"
 
 @st.cache_data
 def load_data(file_path: Path) -> pd.DataFrame:
-    """Load the career dataset and convert list-like columns properly."""
-    df = pd.read_csv(file_path)
+    """Load dataset from Excel and repair structure if needed."""
+    df = pd.read_excel(file_path)
+
+    expected_cols = {
+        "role_title",
+        "domain",
+        "role_description",
+        "required_skills",
+        "preferred_skills",
+        "experience_level",
+        "education_level",
+        "interest_tags",
+    }
+
+    # Repair case where CSV-style text was pasted into one Excel column
+    if df.shape[1] == 1 and not expected_cols.issubset(set(df.columns)):
+        rows = [df.columns[0]] + df.iloc[:, 0].dropna().astype(str).tolist()
+        parsed = list(csv.reader(rows))
+        df = pd.DataFrame(parsed[1:], columns=parsed[0])
 
     list_like_cols = ["required_skills", "preferred_skills", "interest_tags"]
 
@@ -39,9 +56,12 @@ def load_data(file_path: Path) -> pd.DataFrame:
         if pd.isna(value):
             return []
         try:
-            return ast.literal_eval(value)
+            parsed = ast.literal_eval(value)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
         except Exception:
-            return [item.strip() for item in str(value).split("|") if item.strip()]
+            pass
+        return [item.strip() for item in str(value).split("|") if item.strip()]
 
     for col in list_like_cols:
         if col in df.columns:
@@ -103,7 +123,7 @@ def build_learning_roadmap(missing_required_skills):
         return [
             "Strengthen existing portfolio projects",
             "Practice interview questions for the target role",
-            "Apply for relevant entry-level opportunities"
+            "Apply for relevant entry-level opportunities",
         ]
 
     roadmap = []
@@ -151,11 +171,11 @@ def score_roles(df, user_profile):
     )
 
     scored_df["fit_score"] = (
-        0.45 * scored_df["required_skill_score"] +
-        0.15 * scored_df["preferred_skill_score"] +
-        0.20 * scored_df["interest_score"] +
-        0.10 * scored_df["experience_score"] +
-        0.10 * scored_df["education_score"]
+        0.45 * scored_df["required_skill_score"]
+        + 0.15 * scored_df["preferred_skill_score"]
+        + 0.20 * scored_df["interest_score"]
+        + 0.10 * scored_df["experience_score"]
+        + 0.10 * scored_df["education_score"]
     )
 
     scored_df["missing_required_skills"] = scored_df["required_skills"].apply(
@@ -169,7 +189,7 @@ def score_roles(df, user_profile):
     )
     scored_df["recommendation_explanation"] = scored_df.apply(
         build_recommendation_explanation,
-        axis=1
+        axis=1,
     )
 
     return scored_df.sort_values(by="fit_score", ascending=False).reset_index(drop=True)
@@ -182,7 +202,26 @@ if not DATA_FILE.exists():
     st.error(f"Data file not found: {DATA_FILE}")
     st.stop()
 
-df = load_data(DATA_FILE)
+try:
+    df = load_data(DATA_FILE)
+except Exception as e:
+    st.error(f"Failed to load dataset: {e}")
+    st.stop()
+
+required_columns = [
+    "role_title",
+    "domain",
+    "required_skills",
+    "preferred_skills",
+    "experience_level",
+    "education_level",
+    "interest_tags",
+]
+
+missing_columns = [col for col in required_columns if col not in df.columns]
+if missing_columns:
+    st.error(f"Dataset is missing required columns: {missing_columns}")
+    st.stop()
 
 all_skills = sorted(
     {
@@ -214,41 +253,49 @@ with st.sidebar:
 
     education_level = st.selectbox(
         "Education Level",
-        ["Bachelor", "MSc", "PhD"]
+        ["Bachelor", "MSc", "PhD"],
     )
 
     experience_level = st.selectbox(
         "Experience Level",
-        ["Entry", "Junior", "Mid"]
+        ["Entry", "Junior", "Mid"],
     )
 
     current_skills = st.multiselect(
         "Current Skills",
         options=all_skills,
-        default=["Python", "SQL", "Statistics", "Data Visualization"]
+        default=["Python", "SQL", "Statistics", "Data Visualization"],
     )
 
     interests = st.multiselect(
         "Interests",
         options=all_interests,
-        default=["AI", "Analytics", "Problem Solving"]
+        default=["AI", "Analytics", "Problem Solving"],
     )
 
     top_n = st.slider(
         "Number of Recommendations",
         min_value=3,
         max_value=10,
-        value=5
+        value=5,
     )
 
 user_profile = {
     "education_level": education_level,
     "experience_level": experience_level,
     "current_skills": current_skills,
-    "interests": interests
+    "interests": interests,
 }
 
 if st.button("Generate Career Recommendations"):
+    if not current_skills:
+        st.warning("Please select at least one current skill.")
+        st.stop()
+
+    if not interests:
+        st.warning("Please select at least one interest.")
+        st.stop()
+
     results_df = score_roles(df, user_profile)
     top_results = results_df.head(top_n)
 
@@ -290,7 +337,7 @@ if st.button("Generate Career Recommendations"):
             "matched_required_skills",
             "missing_required_skills",
             "recommendation_explanation",
-            "learning_roadmap"
+            "learning_roadmap",
         ]
     ].copy()
 
@@ -298,7 +345,7 @@ if st.button("Generate Career Recommendations"):
         label="Download Recommendations as CSV",
         data=export_df.to_csv(index=False).encode("utf-8"),
         file_name="career_recommendations.csv",
-        mime="text/csv"
+        mime="text/csv",
     )
 else:
-    st.info("Fill in your profile in the sidebar, then click 'Generate Career Recommendations'.")
+    st.info("Fill in your profile in the sidebar, then click Generate Career Recommendations.")
