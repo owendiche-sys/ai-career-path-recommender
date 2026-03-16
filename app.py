@@ -23,7 +23,7 @@ st.set_page_config(
 # └── requirements.txt
 # ---------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
-DATA_FILE = BASE_DIR / "result" / "career_roles_seed.csv"
+DATA_FILE = BASE_DIR / "result" / "career_roles_seed.xlsx"
 
 
 @st.cache_data
