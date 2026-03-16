@@ -1,6 +1,8 @@
-import streamlit as st
-import pandas as pd
 import ast
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
 
 
 st.set_page_config(
@@ -9,16 +11,27 @@ st.set_page_config(
     layout="wide"
 )
 
+# ---------------------------------------------------
+# File path setup
+# Assumes:
+# repo/
+# ├── app.py
+# ├── result/
+# │   └── career_roles_seed.csv
+# ├── notebooks/
+# ├── data/
+# └── requirements.txt
+# ---------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent
+DATA_FILE = BASE_DIR / "result" / "career_roles_seed.csv"
+
 
 @st.cache_data
-def load_data(file_path: str) -> pd.DataFrame:
-    df = pd.read_excel(file_path)
+def load_data(file_path: Path) -> pd.DataFrame:
+    """Load the career dataset and convert list-like columns properly."""
+    df = pd.read_csv(file_path)
 
-    list_like_cols = [
-        "required_skills",
-        "preferred_skills",
-        "interest_tags"
-    ]
+    list_like_cols = ["required_skills", "preferred_skills", "interest_tags"]
 
     def parse_list_column(value):
         if isinstance(value, list):
@@ -38,8 +51,8 @@ def load_data(file_path: str) -> pd.DataFrame:
 
 
 def overlap_score(user_items, role_items):
-    user_set = set(str(x).strip().lower() for x in user_items)
-    role_set = set(str(x).strip().lower() for x in role_items)
+    user_set = {str(x).strip().lower() for x in user_items}
+    role_set = {str(x).strip().lower() for x in role_items}
 
     if not role_set:
         return 0.0
@@ -70,13 +83,19 @@ def education_score(user_edu, role_edu):
 
 
 def missing_skills(user_skills, required_skills):
-    user_set = set(skill.strip().lower() for skill in user_skills)
-    return [skill for skill in required_skills if skill.strip().lower() not in user_set]
+    user_set = {skill.strip().lower() for skill in user_skills}
+    return [
+        skill for skill in required_skills
+        if skill.strip().lower() not in user_set
+    ]
 
 
 def matched_skills(user_skills, required_skills):
-    user_set = set(skill.strip().lower() for skill in user_skills)
-    return [skill for skill in required_skills if skill.strip().lower() in user_set]
+    user_set = {skill.strip().lower() for skill in user_skills}
+    return [
+        skill for skill in required_skills
+        if skill.strip().lower() in user_set
+    ]
 
 
 def build_learning_roadmap(missing_required_skills):
@@ -96,14 +115,19 @@ def build_learning_roadmap(missing_required_skills):
 
 
 def build_recommendation_explanation(row):
-    matched = ", ".join(row["matched_required_skills"][:3]) if row["matched_required_skills"] else "some relevant skills"
+    matched = (
+        ", ".join(row["matched_required_skills"][:3])
+        if row["matched_required_skills"]
+        else "some relevant skills"
+    )
     missing_count = len(row["missing_required_skills"])
     fit_pct = round(row["fit_score"] * 100, 1)
 
     return (
-        f"This role is a strong match because your profile already aligns with key skills such as {matched}. "
-        f"It belongs to the {row['domain']} domain and has a current fit score of {fit_pct}%. "
-        f"You would still need to strengthen {missing_count} important skill(s) to become more competitive."
+        f"This role is a strong match because your profile already aligns with key skills such as "
+        f"{matched}. It belongs to the {row['domain']} domain and has a current fit score of "
+        f"{fit_pct}%. You would still need to strengthen {missing_count} important skill(s) "
+        f"to become more competitive."
     )
 
 
@@ -144,22 +168,21 @@ def score_roles(df, user_profile):
         build_learning_roadmap
     )
     scored_df["recommendation_explanation"] = scored_df.apply(
-        build_recommendation_explanation, axis=1
+        build_recommendation_explanation,
+        axis=1
     )
 
-    scored_df = scored_df.sort_values(by="fit_score", ascending=False).reset_index(drop=True)
-    return scored_df
+    return scored_df.sort_values(by="fit_score", ascending=False).reset_index(drop=True)
 
 
-# -----------------------------
-# App UI
-# -----------------------------
-st.title("Personalized Career Path Recommendation with AI")
-st.markdown(
-    "Get career recommendations based on your skills, interests, education, and experience level."
-)
+# ---------------------------------------------------
+# Load data safely
+# ---------------------------------------------------
+if not DATA_FILE.exists():
+    st.error(f"Data file not found: {DATA_FILE}")
+    st.stop()
 
-df = load_data("result/career_roles_seed_fixed.xlsx")
+df = load_data(DATA_FILE)
 
 all_skills = sorted(
     {
@@ -176,6 +199,14 @@ all_interests = sorted(
         for tags in df["interest_tags"]
         for tag in tags
     }
+)
+
+# ---------------------------------------------------
+# UI
+# ---------------------------------------------------
+st.title("Personalized Career Path Recommendation with AI")
+st.markdown(
+    "Get career recommendations based on your skills, interests, education, and experience level."
 )
 
 with st.sidebar:
@@ -228,7 +259,6 @@ if st.button("Generate Career Recommendations"):
             st.markdown(f"### {idx + 1}. {row['role_title']}")
             st.write(f"**Domain:** {row['domain']}")
             st.write(f"**Fit Score:** {round(row['fit_score'] * 100, 1)}%")
-
             st.progress(float(row["fit_score"]))
 
             st.write("**Why this role fits:**")
@@ -252,15 +282,17 @@ if st.button("Generate Career Recommendations"):
 
             st.markdown("---")
 
-    export_df = top_results[[
-        "role_title",
-        "domain",
-        "fit_score",
-        "matched_required_skills",
-        "missing_required_skills",
-        "recommendation_explanation",
-        "learning_roadmap"
-    ]].copy()
+    export_df = top_results[
+        [
+            "role_title",
+            "domain",
+            "fit_score",
+            "matched_required_skills",
+            "missing_required_skills",
+            "recommendation_explanation",
+            "learning_roadmap"
+        ]
+    ].copy()
 
     st.download_button(
         label="Download Recommendations as CSV",
